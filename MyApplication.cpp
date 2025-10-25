@@ -65,6 +65,8 @@ void MyApplication()
 			//store frame 3 of the video as the starting background frame
 			Mat background_frame = current_frame.clone();
 			// after: Mat background_frame = current_frame.clone();
+
+			//GMM Background Subtractors
 			cv::Ptr<cv::BackgroundSubtractorMOG2> mog1 = cv::createBackgroundSubtractorMOG2();
 			mog1->setVarThreshold(25);
 			mog1->setDetectShadows(true);
@@ -73,7 +75,12 @@ void MyApplication()
 			mog2->setVarThreshold(25);
 			mog2->setDetectShadows(true);
 
-			const int PERSIST_FRAMES = 30;
+			//Kernels:
+			Mat kOpen = getStructuringElement(MORPH_RECT, Size(3, 3));
+			Mat kClose = getStructuringElement(MORPH_RECT, Size(12, 12));
+
+			const int PERSIST_FRAMES = 40;
+			const int MIN_AREA = 200;
 			Mat persistCount(current_frame.rows, current_frame.cols, CV_16U, Scalar(0)); 
 			Mat persistentMask(current_frame.rows, current_frame.cols, CV_16U, Scalar(0));
 			// now loop through the video, comparing each frame with the background frame
@@ -81,20 +88,21 @@ void MyApplication()
 			{
 				//compute the absolute difference between the current frame and the background frame
 				Mat difference_frame, difference_frame2;
-				mog1->apply(current_frame, difference_frame, 0.004);
-				mog2->apply(current_frame, difference_frame2, 0.001);
+				mog1->apply(current_frame, difference_frame, 0.001);
+				mog2->apply(current_frame, difference_frame2, 0.0005);
 				Mat fgBinary = (difference_frame == 255);
 				Mat fgBinary2 = (difference_frame2 == 255);
 
-				morphologyEx(fgBinary, fgBinary, MORPH_OPEN, getStructuringElement(MORPH_RECT, Size(3, 3)));
-				morphologyEx(fgBinary, fgBinary, MORPH_CLOSE, getStructuringElement(MORPH_RECT, Size(12, 12)));
-				morphologyEx(fgBinary2, fgBinary2, MORPH_OPEN, getStructuringElement(MORPH_RECT, Size(3, 3)));
-				morphologyEx(fgBinary2, fgBinary2, MORPH_CLOSE, getStructuringElement(MORPH_RECT, Size(12, 12)));
+				morphologyEx(fgBinary, fgBinary, MORPH_OPEN, kOpen);
+				morphologyEx(fgBinary, fgBinary, MORPH_CLOSE, kClose);
+				morphologyEx(fgBinary2, fgBinary2, MORPH_OPEN, kOpen);
+				morphologyEx(fgBinary2, fgBinary2, MORPH_CLOSE, kClose);
 				// TODO: if a pixel has been white in the difference frame for 20 consecutive frames, draw a red mask in that position over the original image
 				// find a persistent change by considering pixels where slow mask shows change but quick mask does not
 				Mat changeCandidate;
 				bitwise_and(fgBinary2, ~fgBinary, changeCandidate);
-				morphologyEx(fgBinary, fgBinary, MORPH_CLOSE, getStructuringElement(MORPH_RECT, Size(5, 5))); // apply closing to a candidate
+				morphologyEx(changeCandidate, changeCandidate, MORPH_OPEN, kOpen);
+           		morphologyEx(changeCandidate, changeCandidate, MORPH_CLOSE, kClose);
 
 				persistCount.setTo(0, changeCandidate == 0);  // reset where background
 				add(persistCount, Scalar(1), persistCount, changeCandidate); // increment where changed
