@@ -1,0 +1,31 @@
+# Visual Studio files
+.vs/
+x64/
+Debug/
+Release/
+*.suo
+*.user
+*.userosscache
+*.sdf
+*.opensdf
+*.tlog
+*.log
+*.idb
+*.pdb
+*.ilk
+*.VC.db
+*.VC.opendb
+ipch/
+*.ipch
+
+# OpenCV binary and media files
+*.avi
+*.mp4
+*.mov
+*.dll
+*.lib
+*.obj
+
+# Build results
+[Dd]ebug/
+[Rr]elease/

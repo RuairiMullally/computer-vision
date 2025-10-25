@@ -1,0 +1,15 @@
+Video01 - Indoor, Laptop removed.
+Video02 - Indoor, Laptop abandoned.
+Video03 - Indoor, bag removed.
+Video04 - Indoor, bag abandoned, bag removed.
+Video05 - Indoor, bag abandoned, bag removed.
+Video06 - Indoor, bag abandoned, bag removed.
+Video07 - Outdoor, bag abandoned. 
+Video08 - Outdoor, Car parked.
+Video09 - Indoor, bag put down with people, moves as they leave.
+Video10 - Indoor, Chair moved, Laptop opened.
+
+References:
+Video05, Video06 - CAVIAR dataset available at https://groups.inf.ed.ac.uk/vision/DATASETS/CAVIAR/CAVIARDATA1/ 
+Video07, Video09 - ABODA dataset available at https://github.com/kevinlin311tw/ABODA [Lin et al., 2015:  Lin K., Chen S.-C., Chen C.-S., Lin D.-T., Hung Y.-P., Abandoned object detection via temporal consistency modeling and back-tracing verification for visual surveillance, IEEE Transactions on Information Forensics and Security, 10 (7) (2015), pp. 1359-1370]
+Video08 - A video from the international workshop on the Performance Evaluation of Tracking and Surveillance from the year 2000
