@@ -107,6 +107,15 @@ void MyApplication()
 				persistCount.setTo(0, changeCandidate == 0);  // reset where background
 				add(persistCount, Scalar(1), persistCount, changeCandidate); // increment where changed
 				compare(persistCount, Scalar(PERSIST_FRAMES), persistentMask, CMP_GE);
+				
+				vector<vector<Point>> contours;
+				findContours(persistentMask, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+				for (auto &c : contours) {
+					Rect r = boundingRect(c);
+					if (r.area() > 200)
+						rectangle(current_frame, r, Scalar(0, 0, 255), 2);
+				}
+				imshow("Detected Change", current_frame);
 
 
 
