@@ -1,6 +1,4 @@
-﻿
-#include "Utilities.h"
-
+﻿#include "Utilities.h"
 
 // Test videos and ground truth
 char* abandoned_removed_video_files[] = {
@@ -88,14 +86,14 @@ void MyApplication()
 			Mat persistCount(current_frame.rows, current_frame.cols, CV_16U, Scalar(0)); 
 			Mat persistentMask(current_frame.rows, current_frame.cols, CV_16U, Scalar(0));
 
-			Mat largestBox;
-			bool boxDetected = false;
-			Rect boundingBox;
-			int maxArea = 0;
 			// now loop through the video, comparing each frame with the background frame
+			vector<Rect> detectedBoxes;
+
 			while (!current_frame.empty())
 			{
 				//compute the absolute difference between the current frame and the background frame
+				detectedBoxes.clear();
+
 				Mat difference_frame, difference_frame2;
 				mog1->apply(current_frame, difference_frame, 0.0015);
 				mog2->apply(current_frame, difference_frame2, 0.0003);
@@ -117,29 +115,31 @@ void MyApplication()
 				add(persistCount, Scalar(1), persistCount, changeCandidate); // increment where changed
 				compare(persistCount, Scalar(PERSIST_FRAMES), persistentMask, CMP_GE);
 				
-				//get largest contour and draw bounding box around it in green in the original video
 				vector<vector<Point>> contours;
 				Mat persistentMaskCopy = persistentMask.clone();
 				findContours(persistentMaskCopy, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
 
-				// Find the largest contour and update bounding box if it's bigger than before
+				// CHANGED: Collect ALL contours that meet the minimum area threshold
 				for (size_t i = 0; i < contours.size(); i++)
 				{
 					int area = (int)contourArea(contours[i]);
-					if (area > MIN_AREA && area > maxArea)
+					if (area > MIN_AREA)
 					{
-						maxArea = area;
-						boundingBox = boundingRect(contours[i]);
-						boxDetected = true;
+						Rect boundingBox = boundingRect(contours[i]);
+						detectedBoxes.push_back(boundingBox);
 					}
 				}
 
-				//Draw the bounding box in blue if detected
-				if (boxDetected)
+				//draw ALL detected bounding boxes in blue
+				for (size_t i = 0; i < detectedBoxes.size(); i++)
 				{
-					rectangle(current_frame, boundingBox, Scalar(255, 0, 0), 2); // Blue box
+					rectangle(current_frame, detectedBoxes[i], Scalar(255, 0, 0), 2);
+					
+					string label = "Obj " + to_string(i + 1);
+					putText(current_frame, label, 
+						Point(detectedBoxes[i].x, detectedBoxes[i].y - 5),
+						FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 0, 0), 1);
 				}
-
 
 				// Draw ground truth
 				for (int current = 0; (current < sizeof(object_locations) / 7); current++)
@@ -159,7 +159,6 @@ void MyApplication()
 				writeText(current_frame, frame_title, 15, 15);
 				imshow(string("Original - ") + abandoned_removed_video_files[video_file_no-1], current_frame);
 
-				// Display the difference frame
 				writeText(fgBinary, frame_title, 15, 15);
 				imshow(string("Difference - ") + abandoned_removed_video_files[video_file_no-1], fgBinary);
 
@@ -189,13 +188,10 @@ void MyApplication()
 			destroyWindow(string("Difference - ") + abandoned_removed_video_files[video_file_no-1]);
 			destroyWindow(string("Difference2 - ") + abandoned_removed_video_files[video_file_no-1]);
 			destroyWindow(string("persistentMask - ") + abandoned_removed_video_files[video_file_no-1]);
-			
 		}
 		else
 		{
 			cout << "Cannot open video file: " << filename << endl;
-			//			return -1;
 		}
 	}
-
 }
