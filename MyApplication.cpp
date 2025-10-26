@@ -68,28 +68,37 @@ void MyApplication()
 
 			//GMM Background Subtractors
 			cv::Ptr<cv::BackgroundSubtractorMOG2> mog1 = cv::createBackgroundSubtractorMOG2();
-			mog1->setVarThreshold(25);
+			mog1->setVarThreshold(75);
 			mog1->setDetectShadows(true);
+			mog1->setHistory(350);
+			mog1->setShadowThreshold(0.5);
 
 			cv::Ptr<cv::BackgroundSubtractorMOG2> mog2 = cv::createBackgroundSubtractorMOG2();
-			mog2->setVarThreshold(25);
+			mog2->setVarThreshold(75);
 			mog2->setDetectShadows(true);
+			mog2->setHistory(350);
+			mog2->setShadowThreshold(0.5);
 
 			//Kernels:
 			Mat kOpen = getStructuringElement(MORPH_RECT, Size(3, 3));
-			Mat kClose = getStructuringElement(MORPH_RECT, Size(12, 12));
+			Mat kClose = getStructuringElement(MORPH_RECT, Size(8, 8));
 
-			const int PERSIST_FRAMES = 40;
-			const int MIN_AREA = 200;
+			const int PERSIST_FRAMES = 50;
+			const int MIN_AREA = 25;
 			Mat persistCount(current_frame.rows, current_frame.cols, CV_16U, Scalar(0)); 
 			Mat persistentMask(current_frame.rows, current_frame.cols, CV_16U, Scalar(0));
+
+			Mat largestBox;
+			bool boxDetected = false;
+			Rect boundingBox;
+			int maxArea = 0;
 			// now loop through the video, comparing each frame with the background frame
 			while (!current_frame.empty())
 			{
 				//compute the absolute difference between the current frame and the background frame
 				Mat difference_frame, difference_frame2;
-				mog1->apply(current_frame, difference_frame, 0.001);
-				mog2->apply(current_frame, difference_frame2, 0.0005);
+				mog1->apply(current_frame, difference_frame, 0.0015);
+				mog2->apply(current_frame, difference_frame2, 0.0003);
 				Mat fgBinary = (difference_frame == 255);
 				Mat fgBinary2 = (difference_frame2 == 255);
 
@@ -108,15 +117,28 @@ void MyApplication()
 				add(persistCount, Scalar(1), persistCount, changeCandidate); // increment where changed
 				compare(persistCount, Scalar(PERSIST_FRAMES), persistentMask, CMP_GE);
 				
+				//get largest contour and draw bounding box around it in green in the original video
 				vector<vector<Point>> contours;
-				findContours(persistentMask, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
-				for (auto &c : contours) {
-					Rect r = boundingRect(c);
-					if (r.area() > 200)
-						rectangle(current_frame, r, Scalar(0, 0, 255), 2);
-				}
-				imshow("Detected Change", current_frame);
+				Mat persistentMaskCopy = persistentMask.clone();
+				findContours(persistentMaskCopy, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
 
+				// Find the largest contour and update bounding box if it's bigger than before
+				for (size_t i = 0; i < contours.size(); i++)
+				{
+					int area = (int)contourArea(contours[i]);
+					if (area > MIN_AREA && area > maxArea)
+					{
+						maxArea = area;
+						boundingBox = boundingRect(contours[i]);
+						boxDetected = true;
+					}
+				}
+
+				//Draw the bounding box in blue if detected
+				if (boxDetected)
+				{
+					rectangle(current_frame, boundingBox, Scalar(255, 0, 0), 2); // Blue box
+				}
 
 
 				// Draw ground truth
@@ -147,11 +169,27 @@ void MyApplication()
 				writeText(persistentMask, frame_title, 15, 15);
 				imshow(string("persistentMask - ") + abandoned_removed_video_files[video_file_no-1], persistentMask);
 
-				char choice = cv::waitKey(50);  // Delay between frames
+				char choice = cv::waitKey(25);  // Delay between frames
+				if (choice == 'w')
+				{
+					break;
+				}
 				video[video_file_no-1] >> current_frame;
 				frame_no++;
 			}
-
+			while (true)
+			{
+				char key = cv::waitKey(0);  // Wait indefinitely for key press
+				if (key == 'w')
+				{
+					break;
+				}
+			}
+			destroyWindow(string("Original - ") + abandoned_removed_video_files[video_file_no-1]);
+			destroyWindow(string("Difference - ") + abandoned_removed_video_files[video_file_no-1]);
+			destroyWindow(string("Difference2 - ") + abandoned_removed_video_files[video_file_no-1]);
+			destroyWindow(string("persistentMask - ") + abandoned_removed_video_files[video_file_no-1]);
+			
 		}
 		else
 		{
