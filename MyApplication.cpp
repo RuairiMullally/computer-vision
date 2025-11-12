@@ -1,5 +1,7 @@
 ﻿#include "Utilities.h"
 #include <map>
+#include <vector>
+#include <iomanip>
 
 // Test videos and ground truth
 char* abandoned_removed_video_files[] = {
@@ -57,10 +59,234 @@ struct ObjectTracker
 	ObjectTracker() : maxArea(0), stableFrames(0), isLocked(false), lastSeenFrame(0), classification(0) {}
 };
 
+// Structure to hold detection results for scoring
+struct Detection {
+	int videoNum;
+	int frameNum;
+	int classification;
+	Rect boundingBox;
+	int objectID;
+};
+
+// Structure to hold aggregate scoring statistics
+struct AggregateStats {
+	int totalGroundTruth;
+	int totalTruePositives;
+	int totalFalsePositives;
+	int totalFalseNegatives;
+	int totalCorrectClassifications;
+	double totalDelay;
+	double totalOverlap;
+	int numDelayMeasurements;
+	int numOverlapMeasurements;
+	
+	AggregateStats() : totalGroundTruth(0), totalTruePositives(0), totalFalsePositives(0),
+		totalFalseNegatives(0), totalCorrectClassifications(0), totalDelay(0.0), 
+		totalOverlap(0.0), numDelayMeasurements(0), numOverlapMeasurements(0) {}
+};
+AggregateStats globalStats;
+
+// intersection over union for 2 bounding boxes
+double calculateIoU(const Rect& box1, const Rect& box2) {
+	int x1 = max(box1.x, box2.x);
+	int y1 = max(box1.y, box2.y);
+	int x2 = min(box1.x + box1.width, box2.x + box2.width);
+	int y2 = min(box1.y + box1.height, box2.y + box2.height);
+	
+	if (x2 < x1 || y2 < y1)
+		return 0.0; //no overlap case
+	
+	int intersectionArea = (x2 - x1) * (y2 - y1);
+	int box1Area = box1.width * box1.height;
+	int box2Area = box2.width * box2.height;
+	int unionArea = box1Area + box2Area - intersectionArea;
+	
+	return double(intersectionArea) / double(unionArea);
+}
+
+void scoreAlgorithm(const vector<Detection>& detections, int videoNum) {
+	const double IOU_THRESHOLD = 0.3; // iou matching thres
+	
+	cout << "\n========== Video " << videoNum << " - Comparison ==========" << endl;
+	
+	// print ground truth for this video
+	cout << "\nGROUND TRUTH:" << endl;
+	vector<int> gtIndices;
+	for (int i = 0; i < sizeof(object_locations) / sizeof(object_locations[0]); i++) {
+		if (object_locations[i][IMAGE_NUMBER_INDEX] == videoNum) {
+			gtIndices.push_back(i); // store GT for this video
+
+			string classType = (object_locations[i][CHANGE_TYPE_INDEX] == ABANDONED) ? "ABANDONED" : 
+                   ((object_locations[i][CHANGE_TYPE_INDEX] == REMOVED) ? "REMOVED" : "OTHER_CHANGE");
+
+			cout << "  GT" << gtIndices.size() << ": Frame=" << object_locations[i][FRAME_NUMBER_INDEX]
+				 << ", Type=" << classType
+				 << ", Box=[" << object_locations[i][LEFT_COLUMN_INDEX] << "," 
+				 << object_locations[i][TOP_ROW_INDEX] << "," 
+				 << object_locations[i][RIGHT_COLUMN_INDEX] << ","
+				 << object_locations[i][BOTTOM_ROW_INDEX] << "]" << endl;
+		}
+	}
+	
+	int numGroundTruth = gtIndices.size();
+	
+	// printing detections for this video
+	cout << "DETECTED OBJECTS:" << endl;
+	vector<Detection> videoDetections;
+	for (const auto& det : detections) {
+		if (det.videoNum == videoNum) {
+			videoDetections.push_back(det);
+
+			string classType = (det.classification == ABANDONED) ? "ABANDONED" : "REMOVED";
+			cout << "  DET" << videoDetections.size() << ": Frame=" << det.frameNum
+				 << ", Type=" << classType
+				 << ", Box=[" << det.boundingBox.x << "," << det.boundingBox.y << ","
+				 << (det.boundingBox.x + det.boundingBox.width) << ","
+				 << (det.boundingBox.y + det.boundingBox.height) << "]" << endl;
+		}
+	}
+	
+	// matching detections to ground truth
+	cout << "MATCHING:" << endl;
+	int truePositives = 0;
+	int falsePositives = 0;
+	int correctClassifications = 0;
+	vector<bool> groundTruthMatched(sizeof(object_locations) / sizeof(object_locations[0]), false);
+	
+	for (size_t detIdx = 0; detIdx < videoDetections.size(); detIdx++) {
+		const Detection& det = videoDetections[detIdx];
+		
+		bool matched = false;
+		int bestMatch = -1;
+		double bestIoU = 0.0;
+		
+		// finding best matching ground truth
+		for (size_t gtIdx = 0; gtIdx < gtIndices.size(); gtIdx++) {
+			int i = gtIndices[gtIdx];
+			
+			if (groundTruthMatched[i])
+				continue; // already matched
+			
+			Rect gtBox(object_locations[i][LEFT_COLUMN_INDEX],
+					   object_locations[i][TOP_ROW_INDEX],
+					   object_locations[i][RIGHT_COLUMN_INDEX] - object_locations[i][LEFT_COLUMN_INDEX],
+					   object_locations[i][BOTTOM_ROW_INDEX] - object_locations[i][TOP_ROW_INDEX]);
+			
+			double iou = calculateIoU(det.boundingBox, gtBox);
+			
+			if (iou > bestIoU && iou >= IOU_THRESHOLD) {
+				bestIoU = iou;
+				bestMatch = i;
+				matched = true;
+			}
+		}
+		
+		if (matched) {
+			truePositives++;
+			groundTruthMatched[bestMatch] = true;
+			
+			// find which GT index this is
+			int gtNum = 0;
+			for (size_t k = 0; k < gtIndices.size(); k++) {
+				if (gtIndices[k] == bestMatch) {
+					gtNum = k + 1;
+					break;
+				}
+			}
+			
+			// calculate delay
+			int delay = det.frameNum - object_locations[bestMatch][FRAME_NUMBER_INDEX];
+			globalStats.totalDelay += delay;
+			globalStats.numDelayMeasurements++;
+			
+			// store overlap
+			globalStats.totalOverlap += bestIoU;
+			globalStats.numOverlapMeasurements++;
+			
+			// check if classification is correct
+			int gtClass = object_locations[bestMatch][CHANGE_TYPE_INDEX];
+			bool classCorrect = (det.classification == gtClass);
+			if (classCorrect) {
+				correctClassifications++;
+			}
+			
+			cout << "  DET" << (detIdx + 1) << " -> GT" << gtNum 
+				 << " (IoU=" << fixed << setprecision(3) << bestIoU 
+				 << ", Delay=" << delay << " frames"
+				 << ", Class=" << (classCorrect ? "CORRECT" : "WRONG") << ")" << endl;
+		} else {
+			falsePositives++;
+			cout << "  DET" << (detIdx + 1) << " -> NO MATCH (False Positive)" << endl;
+		}
+	}
+	
+	// check for unmatched ground truth
+	for (size_t gtIdx = 0; gtIdx < gtIndices.size(); gtIdx++) {
+		int i = gtIndices[gtIdx];
+		if (!groundTruthMatched[i]) {
+			cout << "  GT" << (gtIdx + 1) << " -> NOT DETECTED (False Negative)" << endl;
+		}
+	}
+	
+	int falseNegatives = numGroundTruth - truePositives;
+	
+	//update global stats
+	globalStats.totalGroundTruth += numGroundTruth;
+	globalStats.totalTruePositives += truePositives;
+	globalStats.totalFalsePositives += falsePositives;
+	globalStats.totalFalseNegatives += falseNegatives;
+	globalStats.totalCorrectClassifications += correctClassifications;
+	
+	cout << "\nSUMMARY: TP=" << truePositives 
+		 << ", FP=" << falsePositives 
+		 << ", FN=" << falseNegatives 
+		 << ", Correct Class=" << correctClassifications << "/" << truePositives << endl;
+	cout << "================================================\n" << endl;
+}
+
+void printAggregateResults() {
+	cout << "\n\n" << endl;
+	cout << "###################################################" << endl;
+	cout << "##        AGGREGATE RESULTS - ALL VIDEOS         ##" << endl;
+	cout << "###################################################" << endl;
+	cout << "\nDETECTION PERFORMANCE:" << endl;
+	cout << "  Total Ground Truth Objects: " << globalStats.totalGroundTruth << endl;
+	cout << "  True Positives:  " << globalStats.totalTruePositives << endl;
+	cout << "  False Positives: " << globalStats.totalFalsePositives << endl;
+	cout << "  False Negatives: " << globalStats.totalFalseNegatives << endl;
+	
+	double precision = (globalStats.totalTruePositives + globalStats.totalFalsePositives > 0) ? 
+		double(globalStats.totalTruePositives) / double(globalStats.totalTruePositives + globalStats.totalFalsePositives) : 0.0;
+	double recall = (globalStats.totalGroundTruth > 0) ? 
+		double(globalStats.totalTruePositives) / double(globalStats.totalGroundTruth) : 0.0;
+	double f1Score = (precision + recall > 0) ? 
+		2.0 * (precision * recall) / (precision + recall) : 0.0;
+	
+	cout << "\nOVERALL METRICS:" << endl;
+	cout << "  Precision: " << fixed << setprecision(3) << precision << endl;
+	cout << "  Recall:    " << fixed << setprecision(3) << recall << endl;
+	cout << "  F1-Score:  " << fixed << setprecision(3) << f1Score << endl;
+	
+	double classificationAccuracy = (globalStats.totalTruePositives > 0) ? 
+		double(globalStats.totalCorrectClassifications) / double(globalStats.totalTruePositives) : 0.0;
+	cout << "  Classification Accuracy: " << fixed << setprecision(3) << classificationAccuracy 
+		 << " (" << globalStats.totalCorrectClassifications << "/" << globalStats.totalTruePositives << " correct)" << endl;
+	
+	double avgDelay = (globalStats.numDelayMeasurements > 0) ? 
+		globalStats.totalDelay / double(globalStats.numDelayMeasurements) : 0.0;
+	cout << "  Average Detection Delay: " << fixed << setprecision(2) << avgDelay << " frames" << endl;
+	
+	double avgOverlap = (globalStats.numOverlapMeasurements > 0) ? 
+		globalStats.totalOverlap / double(globalStats.numOverlapMeasurements) : 0.0;
+	cout << "  Average Spatial Overlap (IoU): " << fixed << setprecision(3) << avgOverlap << endl;
+	
+	cout << "\n###################################################\n" << endl;
+}
+
 
 void classifyAbandonedRemovedObjects(const Mat& currentFrame, const Mat& backgroundFrame, ObjectTracker& tracker, const Mat& persistentMask)
 {
-    // ---------- ROI + grayscale ----------
+    // get sub-region and convert to grayscale
     Mat curGray, backGray;
     cvtColor(currentFrame, curGray, COLOR_BGR2GRAY);
     cvtColor(backgroundFrame, backGray, COLOR_BGR2GRAY);
@@ -70,6 +296,7 @@ void classifyAbandonedRemovedObjects(const Mat& currentFrame, const Mat& backgro
     Mat currentROI = curGray(roi).clone();
     Mat backgroundROI = backGray(roi).clone();
 
+	//mask originally defined as CV_16U
     Mat maskROI;
     if (persistentMask.type() == CV_8U)
         maskROI = persistentMask(roi).clone();
@@ -79,7 +306,7 @@ void classifyAbandonedRemovedObjects(const Mat& currentFrame, const Mat& backgro
     }
     threshold(maskROI, maskROI, 0, 255, THRESH_BINARY);
 
-    // ---------- Edges → Dilate ----------
+    // find edges and dilate
     Mat curBlur, backBlur, maskBlur, curEdges, backEdges, maskEdges;
     GaussianBlur(currentROI, curBlur, Size(5,5), 0);
     GaussianBlur(backgroundROI, backBlur, Size(5,5), 0);
@@ -95,7 +322,7 @@ void classifyAbandonedRemovedObjects(const Mat& currentFrame, const Mat& backgro
     dilate(backEdges, backDil, K);
     dilate(maskEdges, maskDil, K);
 
-    // ---------- Overlap (intersection / mask) ----------
+    // find overlap
     Mat interCur, interBack;
     bitwise_and(curDil, maskDil, interCur);
     bitwise_and(backDil, maskDil, interBack);
@@ -114,85 +341,9 @@ void classifyAbandonedRemovedObjects(const Mat& currentFrame, const Mat& backgro
 	else
 		tracker.classification = REMOVED;
 
-    // ---------- Visualization: Include BOTH comparisons ----------
-    auto toColor = [](const Mat& g){ Mat c; cvtColor(g, c, COLOR_GRAY2BGR); return c; };
-
-    // Two overlays: one for mask comparison, one for background comparison
-    Mat overlayMask = Mat::zeros(curDil.size(), CV_8UC3);
-    overlayMask.setTo(Scalar(255,255,255), curDil);      // white for current
-    overlayMask.setTo(Scalar(255,0,255),   maskDil);     // magenta for mask
-    overlayMask.setTo(Scalar(0,255,0),     interCur); // green for intersection
-
-    Mat overlayBack = Mat::zeros(curDil.size(), CV_8UC3);
-    overlayBack.setTo(Scalar(255,255,255), backDil);      // white for current
-    overlayBack.setTo(Scalar(0,255,255),   maskDil);     // cyan for background
-    overlayBack.setTo(Scalar(0,255,0),     interBack); // green for intersection
-
-    const int TILE_W = 240, TILE_H = 180, GAP = 8;
-    const Scalar tileBg(30,30,30);
-
-    auto fitTile = [&](const Mat& src)->Mat {
-        Mat srcColor = (src.channels()==1) ? toColor(src) : src;
-        double sx = double(TILE_W)/max(1,srcColor.cols);
-        double sy = double(TILE_H)/max(1,srcColor.rows);
-        double s  = min(sx, sy);
-        Mat scaled; resize(srcColor, scaled, Size(round(srcColor.cols*s), round(srcColor.rows*s)), 0,0,
-                           (s>=1.0? INTER_NEAREST : INTER_AREA));
-        int top = (TILE_H - scaled.rows)/2, bottom = TILE_H - scaled.rows - top;
-        int left= (TILE_W - scaled.cols)/2, right  = TILE_W - scaled.cols - left;
-        Mat out; copyMakeBorder(scaled, out, top, bottom, left, right, BORDER_CONSTANT, tileBg);
-        return out;
-    };
-
-    Mat tCur   = fitTile(curDil);
-    Mat tMask  = fitTile(maskDil);
-    Mat tBack  = fitTile(backDil);
-    Mat tOvMask = fitTile(overlayMask);
-    Mat tOvBack = fitTile(overlayBack);
-
-    auto label = [&](Mat& img, const string& s){
-        rectangle(img, Rect(0,0,img.cols,22), Scalar(0,0,0), FILLED);
-        putText(img, s, Point(6,16), FONT_HERSHEY_SIMPLEX, 0.5, Scalar(0,255,255), 1, LINE_AA);
-    };
-    label(tCur,     "Current Edges");
-    label(tMask,    "Mask Edges");
-    label(tBack,    "Background Edges");
-    label(tOvMask,  "Current vs Mask (overlap=" + cv::format("%.3f", overlapCur) + ")");
-    label(tOvBack,  "Background vs Mask (overlap=" + cv::format("%.3f", overlapBack) + ")");
-
-    // Two rows: first row shows the three edge images, second row shows the two comparisons
-    int canvasW = 3*TILE_W + 4*GAP;
-    int canvasH = 2*TILE_H + 3*GAP + 40;
-    Mat canvas(canvasH, canvasW, CV_8UC3, Scalar(20,20,20));
-
-    auto place = [&](const Mat& tile, int row, int col){
-        int x = GAP + col*(TILE_W+GAP);
-        int y = GAP + row*(TILE_H+GAP);
-        tile.copyTo(canvas(Rect(x,y,TILE_W,TILE_H)));
-    };
-    
-    // First row: edges
-    place(tCur,  0, 0);
-    place(tMask, 0, 1);
-    place(tBack, 0, 2);
-    
-    // Second row: overlays (centered)
-    int offsetX = (TILE_W + GAP) / 2;
-    Mat temp1 = canvas(Rect(GAP + offsetX, GAP + TILE_H + GAP, TILE_W, TILE_H));
-    tOvMask.copyTo(temp1);
-    Mat temp2 = canvas(Rect(GAP + offsetX + TILE_W + GAP, GAP + TILE_H + GAP, TILE_W, TILE_H));
-    tOvBack.copyTo(temp2);
-
-    // Decision text at bottom
-    string txt = "Mask overlap=" + cv::format("%.3f", overlapCur) + 
-                 " vs Back overlap=" + cv::format("%.3f", overlapBack) +
-                 (tracker.classification==ABANDONED ? "  -> ABANDONED" : "  -> REMOVED");
-    putText(canvas, txt, Point(GAP, canvasH - 12), FONT_HERSHEY_SIMPLEX, 0.6,
-            (tracker.classification==ABANDONED ? Scalar(0,220,0) : Scalar(0,0,220)), 2, LINE_AA);
-
-    static bool winit=false;
-    if (!winit) { namedWindow("Edge Comparison", WINDOW_NORMAL); winit=true; }
-    imshow("Edge Comparison", canvas);
+	// imshow("Classify ROI", maskDil);
+	// imshow("Current Edges", curDil);
+	// imshow("Background Edges", backDil);
 }
 
 
@@ -338,7 +489,6 @@ void MyApplication()
 			Mat current_frame;
 			// store the first frame in current_frame
 			video[video_file_no-1] >> current_frame;
-			Mat background_frame = current_frame.clone(); //bavkground frame used for classification
 
 			//GMM Background Subtractors
 			cv::Ptr<cv::BackgroundSubtractorMOG2> fastGMM = cv::createBackgroundSubtractorMOG2();
@@ -366,6 +516,9 @@ void MyApplication()
 			// Map to track objects by their spatial location (center point as key)
 			map<int, ObjectTracker> objectTrackers;
 			int nextObjectID = 1;
+			
+			// Vector to store locked detections for scoring
+			vector<Detection> lockedDetections;
 
 			// now loop through the video, comparing each frame with the background frame
 			while (!current_frame.empty())
@@ -413,6 +566,34 @@ void MyApplication()
 					objectTrackers,
 					nextObjectID
 				);
+				
+				// store locked detections for scoring
+				for (auto& pair : objectTrackers) {
+					int objID = pair.first;
+					ObjectTracker& tracker = pair.second;
+					
+					if (tracker.isLocked && tracker.classification != 0) {
+						// check if already in vector
+						bool alreadyAdded = false;
+						for (const auto& det : lockedDetections) {
+							if (det.objectID == objID) {
+								alreadyAdded = true;
+								break;
+							}
+						}
+						
+						// only add once per locked object
+						if (!alreadyAdded) {
+							Detection det;
+							det.videoNum = video_file_no;
+							det.frameNum = frame_no;
+							det.classification = tracker.classification;
+							det.boundingBox = tracker.maxBoundingBox;
+							det.objectID = objID;
+							lockedDetections.push_back(det);
+						}
+					}
+				}
 
 				// Draw ground truth
 				for (int current = 0; (current < sizeof(object_locations) / 7); current++)
@@ -442,7 +623,7 @@ void MyApplication()
 				writeText(persistentMask, frame_title, 15, 15);
 				imshow(string("persistentMask - ") + abandoned_removed_video_files[video_file_no-1], persistentMask);
 
-				char choice = cv::waitKey(25);  // Delay between frames
+				char choice = cv::waitKey(5);  // Delay between frames
 				if (choice == 'w')
 				{
 					break;
@@ -450,6 +631,9 @@ void MyApplication()
 				video[video_file_no-1] >> current_frame;
 				frame_no++;
 			}
+
+			scoreAlgorithm(lockedDetections, video_file_no);
+			
 			while (true)
 			{
 				char key = cv::waitKey(0);  // Wait indefinitely for key press
@@ -471,4 +655,5 @@ void MyApplication()
 		}
 	}
 
+	printAggregateResults();
 }
